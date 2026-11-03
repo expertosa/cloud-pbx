@@ -68,6 +68,7 @@ class Session {
   recordingName?: string;
   status: string = 'ringing';
   answeredBy: string | null = null;
+  private answeredLegId: string | null = null;
   answeredAt?: Date;
   /** The extension that placed an internal/outbound call (never rung back). */
   originExtId: string | null = null;
@@ -246,6 +247,7 @@ class Session {
       return;
     }
     this.connected = true;
+    this.answeredLegId = leg.id;
     this.hangupLegs(attempt, leg.id);
     try {
       await this.answer();
@@ -276,6 +278,7 @@ class Session {
       this.log('failed to connect call', { err: String(e) });
       await ari.quiet(() => ari.del(`/channels/${leg.id}`));
       this.connected = false;
+      this.answeredLegId = null;
       attempt.resolve('noanswer');
       return;
     }
@@ -294,7 +297,7 @@ class Session {
   onLegGone(leg: Leg) {
     leg.gone = true;
     legs.delete(leg.id);
-    if (this.connected && this.bridgeId && this.answeredBy === leg.extId) {
+    if (this.connected && this.answeredLegId === leg.id) {
       // The answered party hung up: end the call for the caller too.
       this.connectedEnd?.();
       void ari.quiet(() => ari.del(`/channels/${this.callerId}`));

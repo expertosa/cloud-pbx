@@ -9,7 +9,7 @@ export const destinationSchema = z.discriminatedUnion('type', [
 ]);
 export type Destination = z.infer<typeof destinationSchema>;
 
-export const businessHoursSchema = z.record(
+export const businessHoursSchema = z.partialRecord(
   z.enum(['0', '1', '2', '3', '4', '5', '6']),
   z.array(z.tuple([z.string().regex(/^\d{2}:\d{2}$/), z.string().regex(/^\d{2}:\d{2}$/)])),
 );

@@ -20,7 +20,9 @@ function NumberCard({ n, onSaved }: { n: PhoneNumber; onSaved: () => void }) {
   const [dest, setDest] = useState<Destination>(n.destination);
   const [useHours, setUseHours] = useState(Boolean(n.business_hours && n.after_hours_dest));
   const [hours, setHours] = useState<Hours>(n.business_hours ?? DEFAULT_HOURS);
-  const [after, setAfter] = useState<Destination>(n.after_hours_dest ?? { type: 'hangup' });
+  const [after, setAfter] = useState<Destination>(
+    n.after_hours_dest ?? (dir.extensions[0] ? { type: 'voicemail', id: dir.extensions[0].id } : { type: 'hangup' }),
+  );
   const [label, setLabel] = useState(n.label ?? '');
   const { busy, error, run } = useAction();
 
