@@ -60,7 +60,59 @@ docker compose up -d --build
 | 5060 UDP/TCP | SIP من Telnyx ومن تطبيقات الجوال |
 | 10000–20000 UDP | الصوت (RTP) |
 
-> **ملاحظة Coolify:** Asterisk يحتاج `network_mode: host` عشان منافذ الصوت. تقدر تنشر نفس `docker-compose.yml` كـ Docker Compose resource، وتشيل خدمة `caddy` إذا Traefik حق Coolify يتولى الدومين: وجّه `/ws` إلى `127.0.0.1:8088` وباقي المسارات إلى `127.0.0.1:3000`.
+على سيرفر فيه Coolify وTraefik ماسك 80/443 (مثل hetzner-hel1) لا تشغّل هذا الملف: Caddy على شبكة الهوست يتعارض مع Traefik. استخدم القسم اللي بعده.
+
+## النشر على Coolify
+
+الملف `docker-compose.coolify.yml` يشغّل Asterisk والـ API على شبكة الهوست، وما يشغّل Caddy. Traefik يطلع شهادة `pbx.opps.dev`.
+
+هاتف المتصفح ما يمرر SIP من نفس منفذ اللوحة. JsSIP يفتح `wsUrl` كما يرجع من `GET /api/phone`، والقيمة هي `SIP_WS_URL` بحذافيرها (`web/src/components/Phone.tsx`). الإنتاج: `wss://pbx.opps.dev/ws`. المسار `/ws` يخدمه Asterisk على `127.0.0.1:8088` (`asterisk/etc/http.conf` و `transport-ws` في `pjsip.conf`)، واللوحة والـ API على `127.0.0.1:3000`. `/ari` يبقى على Asterisk وما ينفتح للإنترنت.
+
+Traefik حق Coolify داخل حاوية، فـ `127.0.0.1` عنده مو السيرفر. خدمة `edge` (nginx على شبكة الهوست، منفذ `9080` فقط) توصل الاثنين لعنوان يقدر الـ proxy يوصله، ومسار واحد يكفي:
+
+| الطلب | الوجهة |
+| --- | --- |
+| `https://pbx.opps.dev/ws` | nginx `:9080` ثم `127.0.0.1:8088` (SIP WebSocket) |
+| أي مسار ثاني على نفس الدومين | nginx `:9080` ثم `127.0.0.1:3000` |
+
+انسخ `deploy/coolify-traefik.yaml` من لوحة Coolify: Servers ← Proxy ← Dynamic Configurations، باسم `pbx-opps-dev.yaml`. لا تضف الدومين على مورد Coolify نفسه: حاوية `network_mode: host` ما لها عنوان على شبكة `coolify`، وملصق Traefik يطلع 503.
+
+**إنشاء المورد**
+
+1. GitHub App على `expertosa/cloud-pbx`، Build Pack: Docker Compose.
+2. Docker Compose Location: `/docker-compose.coolify.yml`.
+3. عطّل `Connect To Predefined Network`. تفعيلها يدمج شبكة مع `network_mode: host` والنشر يفشل.
+4. متغيرات البيئة من `.env.example` في واجهة Coolify (تصير ملف `.env` وقت النشر). لا تحط أسرار Telnyx في git.
+5. تأكد أن قالب الـ proxy فيه `extra_hosts: host.docker.internal:host-gateway` (الافتراضي فيه). اسم `certResolver` الافتراضي `letsencrypt`.
+
+**المتغيرات اللي تهم pbx.opps.dev**
+
+| المتغير | القيمة |
+| --- | --- |
+| `PUBLIC_URL` | `https://pbx.opps.dev` |
+| `SIP_WS_URL` | `wss://pbx.opps.dev/ws` |
+| `SIP_DOMAIN` | `pbx.opps.dev` |
+| `EXTERNAL_IP` | `2.29.52.193` |
+| `DOMAIN` | غير مستخدم في ملف Coolify (Caddy فقط) |
+| `POSTGRES_PASSWORD` `JWT_SECRET` `ARI_PASSWORD` | `openssl rand -hex 24` |
+| `SUPERADMIN_EMAIL` `SUPERADMIN_PASSWORD` | حساب مدير المنصة |
+| `TRUNK_MODE` `TELNYX_SIP_USER` `TELNYX_SIP_PASSWORD` `TELNYX_SIP_HOST` | من لوحة Telnyx. مع `registration` الـ Asterisk ما يشتغل إذا اسم المستخدم أو كلمة المرور فاضيين؛ خلّ `TRUNK_MODE=none` لين ما تتوفر |
+| `RTP_START` `RTP_END` | `10000` و `20000` |
+
+إذا كلمة السر فيها `$` اكتبها `$$` في Coolify، لأن Compose يفسّر `$`.
+
+**الجدار الناري على 2.29.52.193**
+
+| المنفذ | لماذا |
+| --- | --- |
+| 22 TCP | SSH |
+| 80 و 443 TCP | Traefik (اللوحة و `wss://…/ws`) |
+| 5060 UDP و TCP | SIP من Telnyx وتطبيقات الجوال |
+| 10000–20000 UDP | RTP |
+
+لا تفتح `3000` ولا `5432` ولا `8088` ولا `9080`. `8088` فيه ARI، و`9080` هو مدخل nginx الداخلي. جدار Hetzner السحابي ما يمس حركة جسر Docker، فـ Traefik يوصل `host.docker.internal:9080` بدون ما تنفتح هالمنافذ للإنترنت. إذا `ufw` شغّال على السيرفر، اسمح لبوابة شبكة `coolify` إلى TCP `9080` وإلا النتيجة 502.
+
+اتصال WebSocket الساكت قد يقطعه Traefik بعد مهلة الخمول الافتراضية (180 ثانية) ويرجع JsSIP يتسجل. إذا انقطع هاتف المتصفح وهو خامل، زِد `entrypoints.https.transport.respondingTimeouts.idleTimeout` في إعداد الـ proxy.
 
 ## ربط Telnyx
 
