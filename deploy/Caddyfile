@@ -1,0 +1,7 @@
+{$DOMAIN} {
+	encode gzip
+	# Browser phone: SIP over secure WebSocket, terminated here and passed to Asterisk.
+	@sipws path /ws
+	reverse_proxy @sipws 127.0.0.1:8088
+	reverse_proxy 127.0.0.1:3000
+}

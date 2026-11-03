@@ -68,7 +68,11 @@ export default async function adminRoutes(app: FastifyInstance) {
   app.patch('/api/admin/numbers/:id', { preHandler: requireSuperadmin }, async (req) => {
     const { id } = z.object({ id: z.uuid() }).parse(req.params);
     const body = z.object({ tenant_id: z.uuid().nullable() }).parse(req.body);
-    // Re-assigning a number resets its routing so it never points into another company.
+    // Re-assigning a number resets its routing so it never points into another company,
+    // and the previous owner can no longer present it as caller ID.
+    const prev = await one('select e164, tenant_id from phone_numbers where id=$1', [id]);
+    if (prev?.tenant_id && prev.tenant_id !== body.tenant_id)
+      await q('update tenants set outbound_caller_id=null where id=$1 and outbound_caller_id=$2', [prev.tenant_id, prev.e164]);
     await q(`update phone_numbers set tenant_id=$2, destination='{"type":"hangup"}', after_hours_dest=null, business_hours=null where id=$1`, [
       id,
       body.tenant_id,
