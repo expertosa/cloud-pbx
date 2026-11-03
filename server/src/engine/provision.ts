@@ -34,7 +34,7 @@ export async function provisionExtension(ext: Extension): Promise<void> {
   };
 
   await putObject('auth', ext.web_username, { auth_type: 'userpass', username: ext.web_username, password: ext.web_password });
-  await putObject('aor', ext.web_username, { max_contacts: '3', remove_existing: 'yes', qualify_frequency: '0' });
+  await putObject('aor', ext.web_username, { max_contacts: '3', remove_existing: 'yes', remove_unavailable: 'yes', qualify_frequency: '30' });
   await putObject('endpoint', ext.web_username, {
     ...common,
     allow: 'opus,ulaw,alaw',

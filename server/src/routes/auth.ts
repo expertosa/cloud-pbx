@@ -74,6 +74,8 @@ export default async function authRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  app.get('/api/auth/options', async () => ({ allowSignup: config.allowSignup }));
+
   app.post('/api/auth/logout', async (_req, reply) => {
     reply.clearCookie(COOKIE, { path: '/' });
     return { ok: true };

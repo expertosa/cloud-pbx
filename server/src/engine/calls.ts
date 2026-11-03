@@ -251,6 +251,13 @@ class Session {
       await this.answer();
       const bridge = await ari.post('/bridges', { type: 'mixing', name: `call-${this.id}` });
       this.bridgeId = bridge.id;
+      if (this.gone) {
+        // Caller hung up while the leg was being answered.
+        await ari.quiet(() => ari.del(`/bridges/${bridge.id}`));
+        await ari.quiet(() => ari.del(`/channels/${leg.id}`));
+        attempt.resolve('gone');
+        return;
+      }
       await ari.post(`/bridges/${bridge.id}/addChannel`, { channel: `${this.callerId},${leg.id}` });
       this.status = 'answered';
       this.answeredBy = leg.extId;
