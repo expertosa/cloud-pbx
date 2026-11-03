@@ -68,7 +68,7 @@ docker compose up -d --build
 
 هاتف المتصفح ما يمرر SIP من نفس منفذ اللوحة. JsSIP يفتح `wsUrl` كما يرجع من `GET /api/phone`، والقيمة هي `SIP_WS_URL` بحذافيرها (`web/src/components/Phone.tsx`). الإنتاج: `wss://pbx.opps.dev/ws`. المسار `/ws` يخدمه Asterisk على `127.0.0.1:8088` (`asterisk/etc/http.conf` و `transport-ws` في `pjsip.conf`)، واللوحة والـ API على `127.0.0.1:3000`. `/ari` يبقى على Asterisk وما ينفتح للإنترنت.
 
-Traefik حق Coolify داخل حاوية، فـ `127.0.0.1` عنده مو السيرفر. خدمة `edge` (nginx على شبكة الهوست، منفذ `9080` فقط) توصل الاثنين لعنوان يقدر الـ proxy يوصله، ومسار واحد يكفي:
+Traefik حق Coolify داخل حاوية، فـ `127.0.0.1` عنده مو السيرفر. خدمة `edge` (nginx على شبكة الهوست، منفذ `9080` فقط) توصل الاثنين لعنوان يقدر الـ proxy يوصله. إعداد nginx يتبنى داخل الصورة من `deploy/Dockerfile.edge`، فـ Coolify ما يحتاج «Preserve repository during deployment» عشان ملف الإعداد. مسار واحد يكفي:
 
 | الطلب | الوجهة |
 | --- | --- |

@@ -12,8 +12,10 @@
 # HTTP (ARI + SIP WebSocket /ws) on 127.0.0.1:8088. Coolify's Traefik is a
 # container, so 127.0.0.1 inside it is not this host. edge is nginx on the
 # host network, port 9080 only. It forwards /ws to Asterisk and every other
-# path to the app, and it does not publish /ari. Caddy is not started, so
-# Traefik keeps 80/443.
+# path to the app, and it does not publish /ari. The config is baked into
+# the image (deploy/Dockerfile.edge); do not bind-mount it. Coolify deletes
+# the checkout after build, and a missing file mount is created as a directory.
+# Caddy is not started, so Traefik keeps 80/443.
 #
 #   docker compose --env-file .env -f docker-compose.coolify.yml up -d --build
 
@@ -67,12 +69,13 @@ services:
         condition: service_started
 
   # HTTP only. Traefik terminates TLS for pbx.opps.dev and proxies here.
+  # Config is inside the image. No volume: Coolify does not keep the repo on disk.
   edge:
-    image: nginx:1.27-alpine
+    build:
+      context: ./deploy
+      dockerfile: Dockerfile.edge
     restart: unless-stopped
     network_mode: host
-    volumes:
-      - ./deploy/nginx-edge.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       app:
         condition: service_started

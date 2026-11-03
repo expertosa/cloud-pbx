@@ -1,0 +1,5 @@
+# Edge image for Coolify. The nginx config is copied in at build time.
+# Coolify removes the git checkout after the build, so a bind mount of
+# nginx-edge.conf becomes an empty directory and the container fails to start.
+FROM nginx:1.27-alpine
+COPY nginx-edge.conf /etc/nginx/conf.d/default.conf
