@@ -1,0 +1,56 @@
+# Paste into Coolify: Servers → hetzner-hel1 → Proxy → Dynamic Configurations.
+# Filename: pbx-opps-dev.yaml
+#
+# One route. The browser phone and the panel share https://pbx.opps.dev.
+# nginx (deploy/nginx-edge.conf) on the host sends /ws to Asterisk :8088
+# and every other path to the API :3000. Do not point this URL at
+# 127.0.0.1 — that address inside coolify-proxy is the proxy itself.
+#
+# The proxy container needs: extra_hosts: ["host.docker.internal:host-gateway"]
+# (present on Coolify's default Traefik template). certResolver name must
+# match the proxy (default: letsencrypt).
+#
+# Do not also attach pbx.opps.dev as a Coolify resource domain. Host-network
+# containers have no coolify-network IP, and a second router will 503.
+
+http:
+  middlewares:
+    pbx-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+  serversTransports:
+    pbx-edge:
+      forwardingTimeouts:
+        dialTimeout: 10s
+        # WebSocket upgrade has no response-header deadline.
+        responseHeaderTimeout: 0s
+        idleConnTimeout: 0s
+
+  routers:
+    pbx-http:
+      entryPoints:
+        - http
+      # Leave the ACME HTTP-01 path for Traefik's resolver.
+      rule: Host(`pbx.opps.dev`) && !PathPrefix(`/.well-known/acme-challenge/`)
+      middlewares:
+        - pbx-https
+      service: pbx
+      priority: 100
+    pbx:
+      entryPoints:
+        - https
+      rule: Host(`pbx.opps.dev`)
+      service: pbx
+      priority: 100
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    pbx:
+      loadBalancer:
+        passHostHeader: true
+        serversTransport: pbx-edge
+        servers:
+          - url: http://host.docker.internal:9080
