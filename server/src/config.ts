@@ -43,3 +43,16 @@ export const config = {
   secureCookies: (process.env.SECURE_COOKIES ?? (process.env.PUBLIC_URL?.startsWith('https') ? 'true' : 'false')) === 'true',
   voicemailMaxSeconds: Number(process.env.VOICEMAIL_MAX_SECONDS ?? 120),
 };
+
+/**
+ * AI receptionist is off unless AI_RECEPTIONIST_ENABLED=true, so existing
+ * installs keep today's routing. Read at call time so tests can flip it.
+ */
+export function aiReceptionistSettings(): { enabled: boolean; host: string; port: number } {
+  const port = Number(process.env.AI_RECEPTIONIST_MEDIA_PORT ?? 9092);
+  return {
+    enabled: (process.env.AI_RECEPTIONIST_ENABLED ?? 'false') === 'true',
+    host: (process.env.AI_RECEPTIONIST_MEDIA_HOST ?? '127.0.0.1').trim(),
+    port: Number.isFinite(port) ? port : 9092,
+  };
+}

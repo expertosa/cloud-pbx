@@ -5,8 +5,10 @@ import { one, q } from '../db.js';
 import { isOpen } from '../lib/hours.js';
 import { logger } from '../lib/logger.js';
 import { isAllowedDestination, isBlockedPremium, normalizeDid, normalizeDialed } from '../lib/phone.js';
+import { HttpError } from '../lib/tenancy.js';
 import type { Destination, Extension, Ivr, PhoneNumber, RingGroup, Tenant } from '../lib/types.js';
 import { sendWebhook } from '../lib/webhooks.js';
+import { AiSession, evaluateLiveControl, fallbackDestination, handoffOriginate, type HandoffContext } from './ai-receptionist.js';
 import { ari } from './ari.js';
 
 /* -------------------------------------------------------------------------- */
@@ -78,6 +80,12 @@ class Session {
   private goneWaiters: (() => void)[] = [];
   private connectedEnd?: () => void;
   private finalized = false;
+  /** External-media leg for the AI receptionist. Idle unless this call took that destination. */
+  readonly receptionist = new AiSession();
+  /** Present only while human legs are being rung after a receptionist transfer. */
+  private handoff?: HandoffContext;
+  private aiResult?: 'gone' | 'transfer' | 'fallback' | 'hangup';
+  private aiWait?: (r: 'gone' | 'transfer' | 'fallback' | 'hangup') => void;
 
   constructor(
     public tenant: Tenant,
@@ -200,16 +208,22 @@ class Session {
       const leg: Leg = { id: legId, session: this, endpoint: t.endpoint, extId: t.extId, gone: false };
       legs.set(legId, leg);
       attempt.legs.add(legId);
+      const handed = this.handoff ? handoffOriginate(t.endpoint, { ...this.handoff, timeoutSec }) : null;
+      if (this.handoff && !handed) this.log('receptionist header skipped for endpoint', { endpoint: t.endpoint });
       try {
-        await ari.post('/channels', {
-          endpoint: t.endpoint,
-          app: config.ari.app,
-          appArgs: `leg,${this.id}`,
-          channelId: legId,
-          callerId,
-          timeout: timeoutSec,
-          originator: this.callerId,
-        });
+        await ari.post(
+          '/channels',
+          {
+            endpoint: handed?.endpoint ?? t.endpoint,
+            app: config.ari.app,
+            appArgs: `leg,${this.id}`,
+            channelId: legId,
+            callerId,
+            timeout: timeoutSec,
+            originator: this.callerId,
+          },
+          handed ? { variables: handed.variables } : undefined,
+        );
       } catch (e) {
         // "Allocation failed" just means that phone is not registered right now.
         if (!String(e).includes('Allocation failed')) this.log('leg originate failed', { endpoint: t.endpoint, err: String(e) });
@@ -313,6 +327,7 @@ class Session {
   onCallerGone(cause?: string) {
     if (this.gone) return;
     this.gone = true;
+    this.settleAi('gone');
     const ws = this.goneWaiters.splice(0);
     ws.forEach((w) => w());
     this.connectedEnd?.();
@@ -323,11 +338,123 @@ class Session {
     await ari.quiet(() => ari.del(`/channels/${this.callerId}`));
   }
 
+  /* --------------------------- AI receptionist --------------------------- */
+
+  private settleAi(result: 'gone' | 'transfer' | 'fallback' | 'hangup') {
+    if (this.aiResult) return;
+    this.aiResult = result;
+    this.aiWait?.(result);
+  }
+
+  /** Outcome already decided (caller gone, media died) before we start waiting. */
+  receptionResult(): 'gone' | 'transfer' | 'fallback' | 'hangup' | undefined {
+    return this.aiResult;
+  }
+
+  holdForReceptionist(): Promise<'gone' | 'transfer' | 'fallback' | 'hangup'> {
+    if (this.aiResult) return Promise.resolve(this.aiResult);
+    if (this.gone) return Promise.resolve('gone');
+    return new Promise((resolve) => {
+      this.aiWait = resolve;
+      this.whenGone().then(() => this.settleAi('gone'));
+    });
+  }
+
+  async ensureCallerBridge(): Promise<boolean> {
+    try {
+      if (!this.bridgeId) {
+        const bridge = await ari.post('/bridges', { type: 'mixing', name: `call-${this.id}` });
+        this.bridgeId = bridge.id;
+      }
+      await ari.post(`/bridges/${this.bridgeId}/addChannel`, { channel: this.callerId });
+      return true;
+    } catch (e) {
+      this.log('bridge failed', { err: String(e) });
+      return false;
+    }
+  }
+
+  /** Drop the caller out of the mixing bridge so a later human leg can bridge them again. */
+  async leaveBridge() {
+    if (!this.bridgeId) return;
+    const id = this.bridgeId;
+    this.bridgeId = undefined;
+    await ari.quiet(() => ari.post(`/bridges/${id}/removeChannel`, { channel: this.callerId }));
+    await ari.quiet(() => ari.del(`/bridges/${id}`));
+  }
+
+  private async detachAiChannel() {
+    const id = this.receptionist.channelId;
+    if (!id) return;
+    await ari.quiet(() => ari.del(`/channels/${id}`));
+  }
+
+  /** AudioSocket peer closed before a transfer. The caller stays up and takes the fallback. */
+  onAiMediaGone() {
+    const result = this.receptionist.mediaEnded();
+    if (result.action !== 'fallback') return;
+    void this.finishAiFallback();
+  }
+
+  private async finishAiFallback() {
+    await this.leaveBridge();
+    this.status = 'ringing';
+    await q(`update calls set status='ringing' where id=$1 and status='ai'`, [this.id]).catch(() => {});
+    this.settleAi('fallback');
+  }
+
+  /**
+   * Receptionist asked to move this live call to a human destination.
+   * Detaches the media channel, then runs the same destination logic as an IVR option.
+   * Resolves once ringing has started, not when the human conversation ends.
+   */
+  async transferFromIntegration(dest: Destination, summary?: string, externalRef?: string): Promise<void> {
+    if (!this.receptionist.requestControl()) throw new HttpError(409, 'المكالمة ليست مع الموظف الذكي');
+    const caller = this.callerChannel.caller ?? {};
+    this.handoff = {
+      callId: this.id,
+      summary: summary ?? '',
+      callerName: String(caller.name || caller.number || 'unknown'),
+      callerNumber: String(caller.number || 'unknown'),
+      timeoutSec: RING_SECONDS,
+    };
+    await this.detachAiChannel();
+    await this.leaveBridge();
+    this.connected = false;
+    this.answeredLegId = null;
+    this.status = 'ringing';
+    await q(`update calls set status='ringing', handled_by_ai=true, transferred_at=now(), external_ref=$2 where id=$1`, [
+      this.id,
+      externalRef ?? null,
+    ]).catch((e) => this.log('failed to record transfer', { err: String(e) }));
+    sendWebhook(this.tenant, 'call.transferred', {
+      call_id: this.id,
+      from: caller.number || null,
+      from_name: caller.name || null,
+      destination: dest,
+      external_ref: externalRef ?? null,
+      summary: summary ?? null,
+    });
+    this.receptionist.finish();
+    this.settleAi('transfer');
+    const hops = this.receptionist.hops + 1;
+    void runDestination(this, dest, hops).catch((e) => this.log('transfer routing failed', { err: String(e) }));
+  }
+
+  async hangupFromIntegration(): Promise<void> {
+    if (!this.receptionist.requestControl()) throw new HttpError(409, 'المكالمة ليست مع الموظف الذكي');
+    await this.detachAiChannel();
+    this.receptionist.finish();
+    this.settleAi('hangup');
+    await this.hangup();
+  }
+
   private async finalize(cause?: string) {
     if (this.finalized) return;
     this.finalized = true;
     if (this.dialing) this.hangupLegs(this.dialing);
     for (const [id, leg] of legs) if (leg.session === this) void ari.quiet(() => ari.del(`/channels/${id}`));
+    if (this.receptionist.channelId) void ari.quiet(() => ari.del(`/channels/${this.receptionist.channelId}`));
     if (this.bridgeId) void ari.quiet(() => ari.del(`/bridges/${this.bridgeId}`));
     sessionsByCaller.delete(this.callerId);
     sessionsById.delete(this.id);
@@ -447,10 +574,72 @@ async function runDestination(s: Session, dest: Destination, hops = 0): Promise<
       await s.voicemail(ext);
       return s.hangup();
     }
+    case 'ai_receptionist':
+      return runAiReceptionist(s, dest, hops);
     case 'hangup':
     default:
       return s.hangup();
   }
+}
+
+/**
+ * Answer the caller, bridge them to an AudioSocket externalMedia channel, and
+ * wait. If the media target cannot be reached (or the flag is off, or the
+ * socket drops), run the configured fallback instead of hanging up.
+ */
+async function runAiReceptionist(s: Session, dest: Destination, hops: number): Promise<void> {
+  const fallback = fallbackDestination(dest);
+  const plan = s.receptionist.begin(s.id, fallback, hops, config.ari.app);
+  if (!plan.ok) {
+    s.log('ai receptionist not attached', { reason: plan.reason });
+    return runDestination(s, fallback, hops + 1);
+  }
+  await s.answer();
+  if (s.gone) return;
+  if (!(await s.ensureCallerBridge()) || s.gone) {
+    s.receptionist.connectFailed();
+    await s.leaveBridge();
+    return runDestination(s, fallback, hops + 1);
+  }
+  try {
+    // Asterisk dials the AudioSocket server inside this request. A dead port
+    // comes back as an ARI error; cap the wait so a blackholed host can't hold the caller.
+    await ari.post('/channels/externalMedia', { ...plan.request }, undefined, 4000);
+  } catch (e) {
+    s.log('ai media unreachable, using fallback', { err: String(e), host: plan.request.external_host });
+    await ari.quiet(() => ari.del(`/channels/${plan.channelId}`));
+    await s.leaveBridge();
+    const early = s.receptionResult();
+    if (early === 'gone' || early === 'hangup') return;
+    if (!early) s.receptionist.connectFailed();
+    return runDestination(s, fallback, hops + 1);
+  }
+  const afterCreate = s.receptionResult();
+  if (s.gone || afterCreate === 'gone' || afterCreate === 'hangup') {
+    await ari.quiet(() => ari.del(`/channels/${plan.channelId}`));
+    return;
+  }
+  if (afterCreate === 'fallback') {
+    await ari.quiet(() => ari.del(`/channels/${plan.channelId}`));
+    return runDestination(s, fallback, hops + 1);
+  }
+  try {
+    await ari.post(`/bridges/${s.bridgeId}/addChannel`, { channel: plan.channelId });
+  } catch (e) {
+    s.log('failed to bridge ai media', { err: String(e) });
+    await ari.quiet(() => ari.del(`/channels/${plan.channelId}`));
+    await s.leaveBridge();
+    if (!s.receptionResult()) s.receptionist.connectFailed();
+    const failed = s.receptionResult();
+    if (failed === 'gone' || failed === 'hangup') return;
+    return runDestination(s, fallback, hops + 1);
+  }
+  s.receptionist.markUp();
+  s.status = 'ai';
+  await q(`update calls set status='ai', handled_by_ai=true where id=$1`, [s.id]).catch((e) => s.log('failed to mark ai call', { err: String(e) }));
+  s.log('ai receptionist connected', { channel: plan.channelId });
+  const outcome = await s.holdForReceptionist();
+  if (outcome === 'fallback') return runDestination(s, fallback, hops + 1);
 }
 
 async function ringExtension(s: Session, ext: Extension, hops: number) {
@@ -654,6 +843,13 @@ export function startCallEngine() {
         await leg.session.onLegAnswered(leg);
         return;
       }
+      // externalMedia enters Stasis with appArgs = the call id (the AudioSocket UUID).
+      // Bridging happens in runAiReceptionist; hanging this channel up would cut the audio.
+      if (typeof ch.id === 'string' && ch.id.startsWith('ai-') && sessionsById.has(ch.id.slice(3))) return;
+      if (args[0] && sessionsById.has(args[0])) {
+        const owner = sessionsById.get(args[0]);
+        if (owner && (owner.receptionist.phase === 'connecting' || owner.receptionist.phase === 'up')) return;
+      }
       if (args[0] === 'inbound') return await handleInbound(ch, args);
       if (args[0] === 'internal') return await handleInternal(ch, args);
       logger.warn({ args }, 'unknown StasisStart');
@@ -671,6 +867,7 @@ export function startCallEngine() {
     if (s) s.onCallerGone(ev.cause_txt);
     const leg = legs.get(id);
     if (leg && !leg.gone) leg.session.onLegGone(leg);
+    if (typeof id === 'string' && id.startsWith('ai-')) sessionsById.get(id.slice(3))?.onAiMediaGone();
   };
   ari.on('StasisEnd', onGone);
   ari.on('ChannelDestroyed', onGone);
@@ -696,6 +893,26 @@ export function startCallEngine() {
     for (const s of [...sessionsByCaller.values()]) s.onCallerGone('asterisk restart');
     legs.clear();
   });
+}
+
+export async function transferLiveCall(
+  callId: string,
+  tenantId: string,
+  body: { destination: Destination; summary?: string; externalRef?: string },
+): Promise<{ ok: true; call_id: string; destination: Destination }> {
+  const s = sessionsById.get(callId);
+  const gate = evaluateLiveControl(s ? { tenantId: s.tenant.id, phase: s.receptionist.phase } : null, tenantId);
+  if (!gate.ok) throw new HttpError(gate.status, gate.message);
+  await s!.transferFromIntegration(body.destination, body.summary, body.externalRef);
+  return { ok: true, call_id: callId, destination: body.destination };
+}
+
+export async function hangupLiveCall(callId: string, tenantId: string): Promise<{ ok: true }> {
+  const s = sessionsById.get(callId);
+  const gate = evaluateLiveControl(s ? { tenantId: s.tenant.id, phase: s.receptionist.phase } : null, tenantId);
+  if (!gate.ok) throw new HttpError(gate.status, gate.message);
+  await s!.hangupFromIntegration();
+  return { ok: true };
 }
 
 export function activeCalls() {

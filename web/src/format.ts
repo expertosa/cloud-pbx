@@ -34,6 +34,7 @@ export const statusLabel: Record<string, string> = {
   failed: 'لم تكتمل',
   rejected: 'محجوبة',
   abandoned: 'أُلغيت',
+  ai: 'الموظف الذكي',
 };
 
 export const directionLabel: Record<string, string> = {

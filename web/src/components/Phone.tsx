@@ -61,7 +61,7 @@ export default function Phone() {
   const [open, setOpen] = useState(false);
   const [dial, setDial] = useState('');
   const [state, setState] = useState<CallState>('idle');
-  const [peer, setPeer] = useState<{ number: string; name?: string }>({ number: '' });
+  const [peer, setPeer] = useState<{ number: string; name?: string; summary?: string }>({ number: '' });
   const [muted, setMuted] = useState(false);
   const [showPad, setShowPad] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -159,7 +159,9 @@ export default function Phone() {
         return;
       }
       const from = e.request?.from;
-      setPeer({ number: from?.uri?.user ?? '', name: from?.display_name });
+      const header = (name: string) => (typeof e.request?.getHeader === 'function' ? e.request.getHeader(name) : undefined);
+      const summary = header('X-Receptionist-Summary') || (header('X-Receptionist-Call') ? 'تحويل من الموظف الذكي' : undefined);
+      setPeer({ number: from?.uri?.user ?? '', name: from?.display_name, summary: summary || undefined });
       setState('incoming');
       setOpen(true);
       handlers.current.ringer.start();
@@ -285,6 +287,7 @@ export default function Phone() {
               <div className="call-state">
                 <div className="peer">{fmtPhone(peer.number) === 'غير معروف' ? peer.number : fmtPhone(peer.number)}</div>
                 {peer.name && peer.name !== peer.number && <div className="peer-name">{peer.name}</div>}
+                {peer.summary && <div className="phone-note">{peer.summary}</div>}
                 <div className="timer">{state === 'active' ? mmss : state === 'incoming' ? 'يتصل بك' : note}</div>
               </div>
               {state === 'active' && showPad && (

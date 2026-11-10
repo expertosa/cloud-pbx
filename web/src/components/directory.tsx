@@ -5,14 +5,15 @@ interface Directory {
   extensions: Extension[];
   groups: RingGroup[];
   ivrs: Ivr[];
+  aiReceptionist: boolean;
   reload: () => Promise<void>;
 }
 
-const Ctx = createContext<Directory>({ extensions: [], groups: [], ivrs: [], reload: async () => {} });
+const Ctx = createContext<Directory>({ extensions: [], groups: [], ivrs: [], aiReceptionist: false, reload: async () => {} });
 
 /** Extensions, ring groups and IVRs of the company — shared by every routing picker. */
-export function DirectoryProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<Omit<Directory, 'reload'>>({ extensions: [], groups: [], ivrs: [] });
+export function DirectoryProvider({ children, aiReceptionist = false }: { children: ReactNode; aiReceptionist?: boolean }) {
+  const [state, setState] = useState<Pick<Directory, 'extensions' | 'groups' | 'ivrs'>>({ extensions: [], groups: [], ivrs: [] });
   const reload = useCallback(async () => {
     const [extensions, groups, ivrs] = await Promise.all([
       api.get<Extension[]>('/api/extensions'),
@@ -24,7 +25,7 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     reload().catch(() => {});
   }, [reload]);
-  return <Ctx.Provider value={{ ...state, reload }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ ...state, aiReceptionist, reload }}>{children}</Ctx.Provider>;
 }
 
 export const useDirectory = () => useContext(Ctx);
@@ -50,14 +51,17 @@ export function destinationLabel(d: Destination | null | undefined, dir: Directo
       const i = dir.ivrs.find((x) => x.id === d.id);
       return i ? `الرد الآلي: ${i.name}` : 'رد آلي محذوف';
     }
+    case 'ai_receptionist':
+      return `الموظف الذكي ← ${destinationLabel(d.fallback, dir)}`;
   }
 }
 
-const encode = (d: Destination) => (d.type === 'hangup' ? 'hangup' : `${d.type}:${d.id}`);
+const encode = (d: Destination) => (d.type === 'hangup' || d.type === 'ai_receptionist' ? d.type : `${d.type}:${d.id}`);
 const decode = (v: string): Destination => {
   if (v === 'hangup') return { type: 'hangup' };
-  const [type, id] = v.split(':');
-  return { type, id } as Destination;
+  if (v === 'ai_receptionist') return { type: 'ai_receptionist', fallback: { type: 'hangup' } };
+  const sep = v.indexOf(':');
+  return { type: v.slice(0, sep), id: v.slice(sep + 1) } as Destination;
 };
 
 /** One <select> covering every place a call can be sent. */
@@ -66,40 +70,54 @@ export function DestinationPicker({
   onChange,
   exclude,
   id,
+  allowAi = true,
 }: {
   value: Destination;
   onChange: (d: Destination) => void;
   exclude?: string;
   id?: string;
+  /** Nested fallback picker must not offer the receptionist again. */
+  allowAi?: boolean;
 }) {
   const dir = useDirectory();
+  const showAi = allowAi && (dir.aiReceptionist || value.type === 'ai_receptionist');
+  const fallback = value.type === 'ai_receptionist' ? (value.fallback ?? { type: 'hangup' as const }) : null;
   return (
-    <select id={id} value={encode(value)} onChange={(e) => onChange(decode(e.target.value))}>
-      {dir.ivrs.length > 0 && (
-        <optgroup label="الرد الآلي">
-          {dir.ivrs.filter((i) => i.id !== exclude).map((i) => (
-            <option key={i.id} value={`ivr:${i.id}`}>{i.name}</option>
+    <>
+      <select id={id} value={encode(value)} onChange={(e) => onChange(decode(e.target.value))} aria-label={id ? undefined : 'وجهة المكالمة'}>
+        {dir.ivrs.length > 0 && (
+          <optgroup label="الرد الآلي">
+            {dir.ivrs.filter((i) => i.id !== exclude).map((i) => (
+              <option key={i.id} value={`ivr:${i.id}`}>{i.name}</option>
+            ))}
+          </optgroup>
+        )}
+        {dir.groups.length > 0 && (
+          <optgroup label="مجموعات الرنين">
+            {dir.groups.filter((g) => g.id !== exclude).map((g) => (
+              <option key={g.id} value={`ring_group:${g.id}`}>{g.name}{g.number ? ` (${g.number})` : ''}</option>
+            ))}
+          </optgroup>
+        )}
+        <optgroup label="موظف">
+          {dir.extensions.map((e) => (
+            <option key={e.id} value={`extension:${e.id}`}>{e.name} ({e.number})</option>
           ))}
         </optgroup>
-      )}
-      {dir.groups.length > 0 && (
-        <optgroup label="مجموعات الرنين">
-          {dir.groups.filter((g) => g.id !== exclude).map((g) => (
-            <option key={g.id} value={`ring_group:${g.id}`}>{g.name}{g.number ? ` (${g.number})` : ''}</option>
+        <optgroup label="بريد صوتي">
+          {dir.extensions.map((e) => (
+            <option key={e.id} value={`voicemail:${e.id}`}>بريد {e.name}</option>
           ))}
         </optgroup>
+        {showAi && <option value="ai_receptionist">الموظف الذكي</option>}
+        <option value="hangup">إنهاء المكالمة</option>
+      </select>
+      {fallback && (
+        <>
+          <span className="hint">إذا تعذّر الموظف الذكي، أو طلب تحويلاً بدون وجهة، تروح المكالمة إلى</span>
+          <DestinationPicker allowAi={false} value={fallback} onChange={(d) => onChange({ type: 'ai_receptionist', fallback: d.type === 'ai_receptionist' ? { type: 'hangup' } : d })} />
+        </>
       )}
-      <optgroup label="موظف">
-        {dir.extensions.map((e) => (
-          <option key={e.id} value={`extension:${e.id}`}>{e.name} ({e.number})</option>
-        ))}
-      </optgroup>
-      <optgroup label="بريد صوتي">
-        {dir.extensions.map((e) => (
-          <option key={e.id} value={`voicemail:${e.id}`}>بريد {e.name}</option>
-        ))}
-      </optgroup>
-      <option value="hangup">إنهاء المكالمة</option>
-    </select>
+    </>
   );
 }

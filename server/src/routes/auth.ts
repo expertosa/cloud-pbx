@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { config } from '../config.js';
+import { aiReceptionistSettings, config } from '../config.js';
 import { one, pool } from '../db.js';
 import { checkPassword, COOKIE, hashPassword, requireUser, type SessionUser } from '../lib/auth.js';
 import { createExtension, HttpError, makeSlug } from '../lib/tenancy.js';
@@ -88,7 +88,7 @@ export default async function authRoutes(app: FastifyInstance) {
     const extension = user.tenant_id
       ? await one('select id, number, name from extensions where tenant_id=$1 and user_id=$2 order by number limit 1', [user.tenant_id, user.id])
       : null;
-    return { user, tenant, extension, allowSignup: config.allowSignup };
+    return { user, tenant, extension, allowSignup: config.allowSignup, features: { aiReceptionist: aiReceptionistSettings().enabled } };
   });
 
   app.post('/api/auth/password', { preHandler: requireUser }, async (req) => {
