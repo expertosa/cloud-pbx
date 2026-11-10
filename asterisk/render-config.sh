@@ -123,11 +123,40 @@ EOF
 fi
 
 # ---- Local test harness ----------------------------------------------
-# A username-authenticated "carrier" for injecting inbound calls, and a
-# simulated carrier endpoint that outbound calls are sent to.
+# testtrunk: username + password, for injecting inbound calls.
+# sim-carrier: where outbound test calls are sent. It also accepts inbound,
+# but only from its own address (identify_by=ip). Matching it by the name
+# "sim-carrier" in From would let anyone who can reach SIP — including the
+# public /ws path, which Asterisk sees as 127.0.0.1 — place trunk calls.
+# The default match is host:port from SIM_CARRIER_URI (127.0.0.1:5090), not
+# all of 127.0.0.1, because nginx proxies /ws from 127.0.0.1 on an ephemeral
+# port. Set TEST_TRUNK_MATCH (comma-separated) to override. Do not set it to
+# a bare 127.0.0.1 on a server that serves the browser phone.
 if [[ "$TEST_TRUNK" == "1" ]]; then
   : "${TEST_TRUNK_PASSWORD:=testtrunk-secret}"
   : "${SIM_CARRIER_URI:=sip:carrier@127.0.0.1:5090}"
+  if [[ -z "${TEST_TRUNK_MATCH:-}" ]]; then
+    carrier="${SIM_CARRIER_URI#*@}"
+    carrier="${carrier%%;*}"
+    carrier="${carrier%%/*}"
+    TEST_TRUNK_MATCH="$carrier"
+    if [[ "$TEST_TRUNK_MATCH" == "127.0.0.1" || "$TEST_TRUNK_MATCH" == "::1" || "$TEST_TRUNK_MATCH" == "[::1]" ]]; then
+      TEST_TRUNK_MATCH="${TEST_TRUNK_MATCH}:5090"
+    fi
+  fi
+  MATCH_LINES=""
+  # Newlines are not separators: a value like "10.0.0.1\nmatch = ..." must not
+  # be written into the config. Split on commas only, then require an IP.
+  IFS=',' read -ra MATCHES <<< "${TEST_TRUNK_MATCH//$'\n'/}"
+  for m in "${MATCHES[@]}"; do
+    m="${m// /}"
+    [[ -z "$m" ]] && continue
+    if [[ ! "$m" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(:[0-9]{1,5})?(/[0-9]{1,3})?$ && ! "$m" =~ ^\[[0-9A-Fa-f:.]+\](:[0-9]{1,5})?$ ]]; then
+      echo "render-config: ignoring unsafe TEST_TRUNK_MATCH entry" >&2
+      continue
+    fi
+    MATCH_LINES+="match = ${m}"$'\n'
+  done
   cat >> "$TRUNK" <<EOF
 
 [testtrunk]
@@ -157,12 +186,18 @@ context = from-trunk
 disallow = all
 allow = ulaw,alaw
 aors = sim-carrier
+identify_by = ip
 direct_media = no
 dtmf_mode = rfc4733
 
 [sim-carrier]
 type = aor
 contact = ${SIM_CARRIER_URI}
+
+[sim-carrier-identify]
+type = identify
+endpoint = sim-carrier
+${MATCH_LINES}
 EOF
 fi
 

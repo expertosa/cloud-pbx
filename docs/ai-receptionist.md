@@ -113,7 +113,7 @@ POST /api/integrations/calls/:id/hangup
 
 | الترويسة | القيمة |
 | --- | --- |
-| اسم المتصل ورقمه | `CALLERID` الأصلي (يظهر في Callolo وهاتف المتصفح) |
+| اسم المتصل ورقمه | `CALLERID` الأصلي. رقم E.164 يبقى كما هو. معرّف غير رقمي (مثل `sipp` في اختبار SIPp) يُمرَّر كما هو ولا يُستبدل بكلمة `unknown` |
 | `X-Receptionist-Call` | معرّف المكالمة |
 | `X-Receptionist-Summary` | الملخص بعد حذف أسطر التحكم، حتى 160 حرفًا |
 
@@ -140,7 +140,7 @@ POST /api/integrations/calls/:id/hangup
 }
 ```
 
-أحداث `call.started` و `call.answered` و `call.ended` و `voicemail.created` كما هي. أعمدة جديدة على `calls`: `handled_by_ai`، `external_ref`، `transferred_at`. حالة `ai` تعني أن المتصل ما زال مع الموظف الذكي.
+أحداث `call.started` و `call.answered` و `call.ended` و `voicemail.created` كما هي. أعمدة جديدة على `calls`: `handled_by_ai`، `external_ref`، `transferred_at`. حالة `ai` تعني أن المتصل **ما زال** مع الموظف الذكي. إذا أقفل وهو معه، تُغلق المكالمة `answered` مع `answered_at` من لحظة وصل الصوت و`duration_s` لمدة الحديث مع الموظف الذكي. التحويل لموظف يمسح `answered_at` حتى تُحسب مدة رد الموظف من لحظة رده.
 
 ## أمان الصوت
 

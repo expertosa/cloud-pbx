@@ -149,7 +149,7 @@ cd ../web && npm i && npm run dev   # اللوحة على :5173
 cd ../server && npm test            # اختبارات الأرقام وأوقات الدوام
 ```
 
-للاختبار بدون Telnyx: `TRUNK_MODE=none TEST_TRUNK=1` يضيف trunk وهمي (`testtrunk`) لإدخال مكالمات، و `TRUNK_ENDPOINT=sim-carrier` يرسل المكالمات الصادرة لـ `sip:carrier@127.0.0.1:5090`.
+للاختبار بدون Telnyx: `TRUNK_MODE=none TEST_TRUNK=1` يضيف `testtrunk` (باسم مستخدم وكلمة مرور) لإدخال مكالمات، و `TRUNK_ENDPOINT=sim-carrier` يرسل الصادرة إلى `sip:carrier@127.0.0.1:5090`. `sim-carrier` لا يُعرف بالاسم: الوارد عليه فقط من `127.0.0.1:5090` (أو `TEST_TRUNK_MATCH`)، لأن مسار `/ws` العام يصل لأستريسك من `127.0.0.1` ولو طابقنا كل الحلقة المحلية لصارت مكالمات المتصفح واردة على الخط.
 
 لتجربة صوت الموظف الذكي على نفس الجهاز (بدون ناقل): `AI_RECEPTIONIST_ENABLED=true` ثم `cd server && npm run audiosocket-echo`. العقد كامل في `docs/ai-receptionist.md`.
 

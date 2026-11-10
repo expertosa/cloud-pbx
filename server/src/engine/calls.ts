@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { config } from '../config.js';
 import { one, q } from '../db.js';
+import { callOutcome } from '../lib/call-outcome.js';
 import { isOpen } from '../lib/hours.js';
 import { logger } from '../lib/logger.js';
 import { isAllowedDestination, isBlockedPremium, normalizeDid, normalizeDialed } from '../lib/phone.js';
@@ -399,7 +400,8 @@ class Session {
   private async finishAiFallback() {
     await this.leaveBridge();
     this.status = 'ringing';
-    await q(`update calls set status='ringing' where id=$1 and status='ai'`, [this.id]).catch(() => {});
+    this.answeredAt = undefined;
+    await q(`update calls set status='ringing', answered_at=null where id=$1 and status='ai'`, [this.id]).catch(() => {});
     this.settleAi('fallback');
   }
 
@@ -414,8 +416,8 @@ class Session {
     this.handoff = {
       callId: this.id,
       summary: summary ?? '',
-      callerName: String(caller.name || caller.number || 'unknown'),
-      callerNumber: String(caller.number || 'unknown'),
+      callerName: String(caller.name || caller.number || ''),
+      callerNumber: String(caller.number || ''),
       timeoutSec: RING_SECONDS,
     };
     await this.detachAiChannel();
@@ -423,10 +425,13 @@ class Session {
     this.connected = false;
     this.answeredLegId = null;
     this.status = 'ringing';
-    await q(`update calls set status='ringing', handled_by_ai=true, transferred_at=now(), external_ref=$2 where id=$1`, [
-      this.id,
-      externalRef ?? null,
-    ]).catch((e) => this.log('failed to record transfer', { err: String(e) }));
+    // The human leg owns answered_at. The AI clock only counts a call that
+    // ends while the receptionist still has it.
+    this.answeredAt = undefined;
+    await q(
+      `update calls set status='ringing', handled_by_ai=true, transferred_at=now(), external_ref=$2, answered_at=null where id=$1`,
+      [this.id, externalRef ?? null],
+    ).catch((e) => this.log('failed to record transfer', { err: String(e) }));
     sendWebhook(this.tenant, 'call.transferred', {
       call_id: this.id,
       from: caller.number || null,
@@ -459,12 +464,13 @@ class Session {
     sessionsByCaller.delete(this.callerId);
     sessionsById.delete(this.id);
 
-    let status = this.status;
-    if (status === 'ringing') status = this.direction === 'inbound' ? 'missed' : 'abandoned';
-    const duration = this.answeredAt ? Math.round((Date.now() - this.answeredAt.getTime()) / 1000) : null;
+    const outcome = callOutcome({ status: this.status, direction: this.direction, answeredAt: this.answeredAt });
+    const status = outcome.status;
+    const duration = outcome.duration_s;
     const row = await one(
-      `update calls set status=$2, ended_at=now(), duration_s=$3, hangup_cause=coalesce(hangup_cause, $4), recording_path=$5 where id=$1 returning *`,
-      [this.id, status, duration, cause ?? null, this.recordingName ?? null],
+      `update calls set status=$2, ended_at=now(), duration_s=$3, hangup_cause=coalesce(hangup_cause, $4), recording_path=$5,
+              answered_at=coalesce(answered_at, $6) where id=$1 returning *`,
+      [this.id, status, duration, cause ?? null, this.recordingName ?? null, this.answeredAt ?? null],
     ).catch((e) => {
       logger.error({ err: String(e) }, 'failed to finalize call');
       return null;
@@ -636,7 +642,10 @@ async function runAiReceptionist(s: Session, dest: Destination, hops: number): P
   }
   s.receptionist.markUp();
   s.status = 'ai';
-  await q(`update calls set status='ai', handled_by_ai=true where id=$1`, [s.id]).catch((e) => s.log('failed to mark ai call', { err: String(e) }));
+  s.answeredAt = new Date();
+  await q(`update calls set status='ai', handled_by_ai=true, answered_at=$2 where id=$1`, [s.id, s.answeredAt]).catch((e) =>
+    s.log('failed to mark ai call', { err: String(e) }),
+  );
   s.log('ai receptionist connected', { channel: plan.channelId });
   const outcome = await s.holdForReceptionist();
   if (outcome === 'fallback') return runDestination(s, fallback, hops + 1);

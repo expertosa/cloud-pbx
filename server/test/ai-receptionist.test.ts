@@ -10,6 +10,7 @@ import {
   handoffOriginate,
   isPrivateMediaHost,
   planExternalMedia,
+  sanitizeCallerNumber,
   sanitizeHeaderText,
 } from '../src/engine/ai-receptionist.js';
 
@@ -114,6 +115,19 @@ describe('handoff legs', () => {
     expect(handed?.variables.RECEPTIONIST_CID_NAME).toBe('Sara A');
     expect(handed?.variables.RECEPTIONIST_CID_NUM).toBe('+966501234567');
     expect(handed?.variables.RECEPTIONIST_TIMEOUT).toBe('25');
+    const named = handoffOriginate('PJSIP/acme101', {
+      callId,
+      summary: '',
+      callerName: 'SIPp',
+      callerNumber: 'sipp',
+      timeoutSec: 25,
+    });
+    expect(named?.variables.RECEPTIONIST_CID_NUM).toBe('sipp');
+    expect(named?.variables.RECEPTIONIST_CID_NAME).toBe('SIPp');
+    expect(sanitizeCallerNumber('+966 50 123 4567')).toBe('+966501234567');
+    expect(sanitizeCallerNumber('anonymous')).toBe('anonymous');
+    expect(sanitizeCallerNumber('unknown')).toBe('');
+    expect(sanitizeCallerNumber('')).toBe('');
     expect(handoffOriginate('PJSIP/966501234567@telnyx', { callId, summary: '', callerName: '', callerNumber: '', timeoutSec: 25 })).toBeNull();
     expect(sanitizeHeaderText('a'.repeat(400)).length).toBe(160);
   });

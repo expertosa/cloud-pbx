@@ -63,9 +63,23 @@ export function sanitizeHeaderText(value: string | undefined, max = SUMMARY_MAX)
     .slice(0, max);
 }
 
+/**
+ * Caller-id for the ringing leg.
+ * A real number keeps a leading + and its digits (`+966 50 123 4567` → `+966501234567`).
+ * A non-numeric test id (`sipp`, `anonymous`) is kept as a SIP token instead of
+ * being replaced with the word "unknown". Empty stays empty so the dialplan
+ * does not overwrite a caller id Asterisk already has.
+ */
 export function sanitizeCallerNumber(value: string | undefined): string {
-  const cleaned = (value ?? '').replace(/[^\d+]/g, '');
-  return cleaned || 'unknown';
+  const raw = (value ?? '').trim();
+  if (!raw || raw.toLowerCase() === 'unknown') return '';
+  const compact = raw.replace(/[\s().-]/g, '');
+  if (/^\+?\d+$/.test(compact)) {
+    const digits = compact.replace(/\D/g, '');
+    if (!digits) return '';
+    return compact.startsWith('+') ? `+${digits}` : digits;
+  }
+  return raw.replace(/[^A-Za-z0-9*#+._-]/g, '').slice(0, 40);
 }
 
 export interface HandoffContext {
