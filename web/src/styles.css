@@ -109,7 +109,7 @@ tr.unread td { font-weight: 600; }
 .status { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; white-space: nowrap; }
 .status::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 .s-answered { color: var(--signal); }
-.s-voicemail, .s-ringing { color: var(--ring); }
+.s-voicemail, .s-ringing, .s-ai { color: var(--ring); }
 .s-missed, .s-failed, .s-rejected, .s-abandoned { color: var(--miss); }
 .dir { color: var(--muted); font-size: var(--fs-xs); }
 

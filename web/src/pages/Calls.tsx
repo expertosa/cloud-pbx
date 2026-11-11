@@ -34,7 +34,10 @@ export function CallsTable({ calls }: { calls: Call[] }) {
                   <div className={/^[\d+]/.test(p.primary) ? 'ltr' : ''} style={{ fontWeight: 500 }}>{p.primary}</div>
                   <div className="dir">{directionLabel[c.direction]}{p.secondary ? `، ${p.secondary}` : ''}</div>
                 </td>
-                <td><span className={`status s-${c.status}`}>{statusLabel[c.status] ?? c.status}</span></td>
+                <td>
+                  <span className={`status s-${c.status}`}>{statusLabel[c.status] ?? c.status}</span>
+                  {c.handled_by_ai && c.status !== 'ai' && <div className="muted small">عبر الموظف الذكي</div>}
+                </td>
                 <td className="hide-sm">{c.answered_name ? `${c.answered_name} (${c.answered_number})` : '—'}</td>
                 <td className="hide-sm muted">{when(c.started_at)}</td>
                 <td className="num">{duration(c.duration_s)}</td>
@@ -80,6 +83,7 @@ export default function Calls() {
             <option value="voicemail">بريد صوتي</option>
             <option value="failed">لم تكتمل</option>
             <option value="rejected">محجوبة</option>
+            <option value="ai">الموظف الذكي</option>
           </select>
         </div>
         <ErrorNote error={error} />

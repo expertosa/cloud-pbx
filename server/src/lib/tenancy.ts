@@ -1,3 +1,4 @@
+import { aiReceptionistSettings } from '../config.js';
 import { one, q } from '../db.js';
 import { randomSecret } from './auth.js';
 import type { Destination, Extension } from './types.js';
@@ -17,9 +18,14 @@ export function makeSlug(): string {
   return s;
 }
 
-/** Throws 400 when a destination points at something outside the tenant. */
+/** Throws 400 when a destination points at something outside the tenant, or at the AI receptionist while the flag is off. */
 export async function assertDestination(tenantId: string, d: Destination | null | undefined): Promise<void> {
   if (!d || d.type === 'hangup') return;
+  if (d.type === 'ai_receptionist') {
+    if (!aiReceptionistSettings().enabled) throw new HttpError(400, 'الموظف الذكي غير مفعّل');
+    await assertDestination(tenantId, d.fallback);
+    return;
+  }
   const table = { extension: 'extensions', voicemail: 'extensions', ring_group: 'ring_groups', ivr: 'ivrs' }[d.type];
   const row = await one(`select id from ${table} where tenant_id=$1 and id=$2`, [tenantId, d.id]);
   if (!row) throw new HttpError(400, 'الوجهة المختارة غير موجودة');

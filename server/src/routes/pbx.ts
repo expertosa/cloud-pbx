@@ -1,12 +1,13 @@
 import crypto from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { config } from '../config.js';
+import { aiReceptionistSettings, config } from '../config.js';
 import { one, q } from '../db.js';
 import { deprovisionExtension, provisionExtension } from '../engine/provision.js';
 import { activeCalls } from '../engine/calls.js';
 import { ari } from '../engine/ari.js';
 import { hashPassword, randomSecret, requireTenantAdmin, requireTenantUser } from '../lib/auth.js';
+import { generateServiceToken, hashServiceToken } from '../lib/integration-auth.js';
 import { assertDestination, assertNumberFree, createExtension, HttpError, nextFreeNumber } from '../lib/tenancy.js';
 import { businessHoursSchema, destinationSchema, type Extension } from '../lib/types.js';
 
@@ -29,11 +30,12 @@ function publicExtension(e: Extension, includeSecrets = false) {
 export default async function pbxRoutes(app: FastifyInstance) {
   /* ------------------------------ settings ------------------------------ */
   app.get('/api/settings', { preHandler: requireTenantAdmin }, async (req) => {
-    return one(
+    const row = await one(
       `select id, name, slug, timezone, record_calls, allow_international, allowed_country_codes, outbound_caller_id,
               daily_outbound_minutes, webhook_url, webhook_secret from tenants where id=$1`,
       [req.user.tid],
     );
+    return { ...row, ai_receptionist: aiReceptionistSettings().enabled };
   });
 
   app.patch('/api/settings', { preHandler: requireTenantAdmin }, async (req) => {
@@ -73,6 +75,36 @@ export default async function pbxRoutes(app: FastifyInstance) {
     const secret = crypto.randomBytes(24).toString('hex');
     await q('update tenants set webhook_secret=$2 where id=$1', [req.user.tid, secret]);
     return { webhook_secret: secret };
+  });
+
+  /* The plaintext token is returned once. Only its SHA-256 is stored, scoped to this tenant. */
+  app.get('/api/settings/integrations', { preHandler: requireTenantAdmin }, async (req, reply) => {
+    if (!aiReceptionistSettings().enabled) return reply.code(404).send({ error: 'not_found', message: 'غير موجود' });
+    return q(
+      `select id, name, created_at, last_used_at, revoked_at from tenant_integrations where tenant_id=$1 order by created_at`,
+      [req.user.tid],
+    );
+  });
+
+  app.post('/api/settings/integrations', { preHandler: requireTenantAdmin }, async (req, reply) => {
+    if (!aiReceptionistSettings().enabled) return reply.code(404).send({ error: 'not_found', message: 'غير موجود' });
+    const body = z.object({ name: z.string().trim().min(1).max(80) }).parse(req.body);
+    const count = await one<{ c: number }>(`select count(*)::int c from tenant_integrations where tenant_id=$1 and revoked_at is null`, [req.user.tid]);
+    if ((count?.c ?? 0) >= 10) throw new HttpError(400, 'وصلت للحد الأعلى من رموز الربط');
+    const token = generateServiceToken();
+    const row = await one<{ id: string; name: string; created_at: string }>(
+      `insert into tenant_integrations(tenant_id, name, token_hash) values ($1,$2,$3) returning id, name, created_at`,
+      [req.user.tid, body.name, hashServiceToken(token)],
+    );
+    return { ...row, token };
+  });
+
+  app.delete('/api/settings/integrations/:id', { preHandler: requireTenantAdmin }, async (req, reply) => {
+    if (!aiReceptionistSettings().enabled) return reply.code(404).send({ error: 'not_found', message: 'غير موجود' });
+    const { id } = idParam.parse(req.params);
+    const row = await one(`update tenant_integrations set revoked_at=now() where id=$1 and tenant_id=$2 and revoked_at is null returning id`, [id, req.user.tid]);
+    if (!row) throw new HttpError(404, 'رمز الربط غير موجود');
+    return { ok: true };
   });
 
   /* -------------------------------- users ------------------------------- */
@@ -228,7 +260,8 @@ export default async function pbxRoutes(app: FastifyInstance) {
       if (n!.c !== new Set(g.member_ids).size) throw new HttpError(400, 'بعض الأعضاء غير موجودين');
     }
     await assertDestination(tid, g.fallback);
-    if (id && g.fallback?.type === 'ring_group' && g.fallback.id === id) throw new HttpError(400, 'المجموعة لا يمكن أن تحول لنفسها');
+    const fallbackId = g.fallback?.type === 'ring_group' ? g.fallback.id : g.fallback?.type === 'ai_receptionist' && g.fallback.fallback?.type === 'ring_group' ? g.fallback.fallback.id : undefined;
+    if (id && fallbackId === id) throw new HttpError(400, 'المجموعة لا يمكن أن تحول لنفسها');
   }
 
   app.get('/api/ring-groups', { preHandler: requireTenantUser }, async (req) =>
@@ -450,9 +483,14 @@ export default async function pbxRoutes(app: FastifyInstance) {
 async function assertNotReferenced(tid: string, type: 'ivr' | 'ring_group' | 'extension' | 'voicemail', id: string) {
   const needle = JSON.stringify({ type, id });
   const refs = await q(
-    `select 'number' as kind from phone_numbers where tenant_id=$1 and (destination @> $2::jsonb or after_hours_dest @> $2::jsonb)
-     union all select 'ivr' from ivrs where tenant_id=$1 and (timeout_dest @> $2::jsonb or exists (select 1 from jsonb_each(options) o where o.value @> $2::jsonb))
-     union all select 'group' from ring_groups where tenant_id=$1 and fallback @> $2::jsonb`,
+    `select 'number' as kind from phone_numbers where tenant_id=$1 and (
+        destination @> $2::jsonb or after_hours_dest @> $2::jsonb
+        or destination->'fallback' @> $2::jsonb or after_hours_dest->'fallback' @> $2::jsonb)
+     union all select 'ivr' from ivrs where tenant_id=$1 and (
+        timeout_dest @> $2::jsonb or timeout_dest->'fallback' @> $2::jsonb
+        or exists (select 1 from jsonb_each(options) o where o.value @> $2::jsonb or o.value->'fallback' @> $2::jsonb))
+     union all select 'group' from ring_groups where tenant_id=$1 and (
+        fallback @> $2::jsonb or fallback->'fallback' @> $2::jsonb)`,
     [tid, needle],
   );
   if (refs.length) throw new HttpError(409, 'هذا العنصر مستخدم في توجيه المكالمات، غيّر التوجيه أولاً');

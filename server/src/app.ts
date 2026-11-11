@@ -13,6 +13,7 @@ import { COOKIE } from './lib/auth.js';
 import { HttpError } from './lib/tenancy.js';
 import adminRoutes from './routes/admin.js';
 import authRoutes from './routes/auth.js';
+import integrationRoutes from './routes/integrations.js';
 import mediaRoutes from './routes/media.js';
 import pbxRoutes from './routes/pbx.js';
 
@@ -54,6 +55,7 @@ export async function buildApp() {
   await app.register(pbxRoutes);
   await app.register(mediaRoutes);
   await app.register(adminRoutes);
+  await app.register(integrationRoutes);
 
   // Dashboard (built SPA). Unknown non-API paths fall back to index.html.
   if (fs.existsSync(config.webDistDir)) {

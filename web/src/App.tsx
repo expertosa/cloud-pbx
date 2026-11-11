@@ -29,7 +29,7 @@ export default function App() {
   if (me === null) return <Login onDone={load} />;
   if (me.user.role === 'superadmin') return <AdminShell me={me} />;
   return (
-    <DirectoryProvider>
+    <DirectoryProvider aiReceptionist={me.features?.aiReceptionist === true}>
       <Shell me={me} />
     </DirectoryProvider>
   );

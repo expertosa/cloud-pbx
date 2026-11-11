@@ -12,6 +12,15 @@ interface TenantSettings {
   daily_outbound_minutes: number;
   webhook_url: string | null;
   webhook_secret: string;
+  ai_receptionist?: boolean;
+}
+
+interface IntegrationToken {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
 }
 
 export default function Settings() {
@@ -94,9 +103,60 @@ export default function Settings() {
         <p className="muted small">كل إشعار يحمل الترويسة X-CloudPBX-Signature وفيها HMAC-SHA256 للمحتوى بهذا المفتاح.</p>
       </div>
 
+      {f.ai_receptionist && <Integrations />}
+
       <ErrorNote error={save.error} />
       {saved && <div className="alert ok" style={{ marginBottom: 12 }}>تم حفظ الإعدادات</div>}
       <button className="btn primary" onClick={submit} disabled={save.busy}>حفظ الإعدادات</button>
     </>
+  );
+}
+
+/** Service tokens for the receptionist. The secret is shown once; the server keeps only a hash. */
+function Integrations() {
+  const list = useLoad(() => api.get<IntegrationToken[]>('/api/settings/integrations'));
+  const [name, setName] = useState('الموظف الذكي');
+  const [issued, setIssued] = useState<string | null>(null);
+  const action = useAction();
+  const create = async () => {
+    setIssued(null);
+    const row = await action.run(() => api.post<{ token: string }>('/api/settings/integrations', { name }));
+    if (row) {
+      setIssued(row.token);
+      await list.reload();
+    }
+  };
+  const revoke = async (id: string) => {
+    if (!confirm('بنوقف هذا الرمز، والخدمة اللي تستخدمه ما تقدر تحوّل المكالمات بعده. نكمل؟')) return;
+    const ok = await action.run(() => api.del(`/api/settings/integrations/${id}`));
+    if (ok) await list.reload();
+  };
+  const active = (list.data ?? []).filter((t) => !t.revoked_at);
+  return (
+    <div className="section stack">
+      <h2>الموظف الذكي</h2>
+      <p className="muted small">رمز خدمة لخدمة الاستقبال الخارجي. نحتفظ ببصمة الرمز فقط، ويخص هالشركة. يظهر الرمز مرة واحدة وقت الإنشاء. تحويل المكالمة يرسل حدث call.transferred بنفس توقيع الـ webhook.</p>
+      {active.length > 0 && (
+        <ul className="stack">
+          {active.map((t) => (
+            <li key={t.id} className="row">
+              <span>{t.name}</span>
+              <span className="muted small">{t.last_used_at ? 'استُخدم' : 'ما استُخدم بعد'}</span>
+              <button className="btn quiet small" type="button" onClick={() => revoke(t.id)}>إيقاف</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {issued && (
+        <div className="alert ok">
+          انسخ الرمز الآن، ما نقدر نعرضه مرة ثانية: <span className="secret">{issued}</span> <Copy value={issued} />
+        </div>
+      )}
+      <div className="row">
+        <label className="field grow">اسم الربط<input value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <button className="btn" type="button" onClick={create} disabled={action.busy || name.trim().length < 1}>إنشاء رمز</button>
+      </div>
+      <ErrorNote error={action.error ?? list.error} />
+    </div>
   );
 }

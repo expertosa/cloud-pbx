@@ -1,11 +1,26 @@
 import { z } from 'zod';
 
+const extensionDest = z.object({ type: z.literal('extension'), id: z.uuid() });
+const ringGroupDest = z.object({ type: z.literal('ring_group'), id: z.uuid() });
+const ivrDest = z.object({ type: z.literal('ivr'), id: z.uuid() });
+const voicemailDest = z.object({ type: z.literal('voicemail'), id: z.uuid() });
+const hangupDest = z.object({ type: z.literal('hangup') });
+
+/** Destinations a human (or the existing IVR/voicemail path) can receive. No nesting. */
+export const humanDestinationSchema = z.discriminatedUnion('type', [extensionDest, ringGroupDest, ivrDest, voicemailDest, hangupDest]);
+export type HumanDestination = z.infer<typeof humanDestinationSchema>;
+
 export const destinationSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('extension'), id: z.uuid() }),
-  z.object({ type: z.literal('ring_group'), id: z.uuid() }),
-  z.object({ type: z.literal('ivr'), id: z.uuid() }),
-  z.object({ type: z.literal('voicemail'), id: z.uuid() }),
-  z.object({ type: z.literal('hangup') }),
+  extensionDest,
+  ringGroupDest,
+  ivrDest,
+  voicemailDest,
+  hangupDest,
+  z.object({
+    type: z.literal('ai_receptionist'),
+    /** Used when the media service is down, the flag is off, or the caller is handed back with no explicit target. */
+    fallback: humanDestinationSchema.optional(),
+  }),
 ]);
 export type Destination = z.infer<typeof destinationSchema>;
 

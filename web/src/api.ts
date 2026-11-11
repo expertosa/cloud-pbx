@@ -29,18 +29,23 @@ export const api = {
   del: <T = any>(url: string) => request<T>('DELETE', url),
 };
 
-export type Destination =
+export type HumanDestination =
   | { type: 'extension'; id: string }
   | { type: 'ring_group'; id: string }
   | { type: 'ivr'; id: string }
   | { type: 'voicemail'; id: string }
   | { type: 'hangup' };
 
+export type Destination =
+  | HumanDestination
+  | { type: 'ai_receptionist'; fallback?: HumanDestination };
+
 export interface Me {
   user: { id: string; name: string; email: string; role: 'owner' | 'admin' | 'agent' | 'superadmin'; tenant_id: string | null };
   tenant: { id: string; name: string; slug: string; timezone: string } | null;
   extension: { id: string; number: string; name: string } | null;
   allowSignup: boolean;
+  features?: { aiReceptionist: boolean };
 }
 
 export interface Extension {
@@ -108,4 +113,7 @@ export interface Call {
   answered_number: string | null;
   answered_name: string | null;
   hangup_cause: string | null;
+  handled_by_ai?: boolean;
+  external_ref?: string | null;
+  transferred_at?: string | null;
 }

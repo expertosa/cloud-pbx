@@ -20,7 +20,7 @@ export class Ari extends EventEmitter {
     return 'Basic ' + Buffer.from(`${config.ari.user}:${config.ari.password}`).toString('base64');
   }
 
-  async request<T = any>(method: string, path: string, opts: { query?: Record<string, unknown>; body?: unknown } = {}): Promise<T> {
+  async request<T = any>(method: string, path: string, opts: { query?: Record<string, unknown>; body?: unknown; timeoutMs?: number } = {}): Promise<T> {
     const url = new URL(config.ari.url.replace(/\/$/, '') + path);
     for (const [k, v] of Object.entries(opts.query ?? {})) {
       if (v === undefined || v === null) continue;
@@ -30,6 +30,7 @@ export class Ari extends EventEmitter {
       method,
       headers: { Authorization: this.auth, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) },
       body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: opts.timeoutMs ? AbortSignal.timeout(opts.timeoutMs) : undefined,
     });
     const text = await res.text();
     if (!res.ok) throw new AriError(res.status, `ARI ${method} ${path} -> ${res.status} ${text}`);
@@ -37,7 +38,8 @@ export class Ari extends EventEmitter {
   }
 
   get = <T = any>(p: string, query?: Record<string, unknown>) => this.request<T>('GET', p, { query });
-  post = <T = any>(p: string, query?: Record<string, unknown>, body?: unknown) => this.request<T>('POST', p, { query, body });
+  post = <T = any>(p: string, query?: Record<string, unknown>, body?: unknown, timeoutMs?: number) =>
+    this.request<T>('POST', p, { query, body, timeoutMs });
   put = <T = any>(p: string, query?: Record<string, unknown>, body?: unknown) => this.request<T>('PUT', p, { query, body });
   del = <T = any>(p: string, query?: Record<string, unknown>) => this.request<T>('DELETE', p, { query });
 
