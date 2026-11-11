@@ -5,6 +5,70 @@ import { when } from '../format';
 
 interface T { id: string; name: string; slug: string; disabled: boolean; created_at: string; extensions: number; numbers: number; calls_30d: number; owner_email: string }
 interface N { id: string; e164: string; label: string | null; tenant_id: string | null; tenant_name: string | null }
+interface N { id: string; e164: string; label: string | null; tenant_id: string | null; tenant_name: string | null }
+
+interface TelnyxBalance {
+  configured: boolean;
+  ok: boolean;
+  message?: string;
+  balance?: string;
+  available_credit?: string;
+  credit_limit?: string;
+  pending?: string;
+  currency?: string;
+  fetched_at?: string;
+  low?: boolean;
+  threshold?: number;
+  topup_url: string;
+}
+
+const TELNYX_BILLING_URL = 'https://portal.telnyx.com/#/billing/payment';
+
+function money(amount: string | undefined, currency: string | undefined): string {
+  if (!amount) return '—';
+  return currency ? `${amount} ${currency}` : amount;
+}
+
+function TelnyxBalanceCard() {
+  const balance = useLoad(() => api.get<TelnyxBalance>('/api/admin/telnyx-balance'));
+  const data = balance.data;
+  const topup = data?.topup_url || TELNYX_BILLING_URL;
+  return (
+    <div className="section">
+      <div className="section-head">
+        <h2>رصيد Telnyx</h2>
+        <div className="row">
+          <button className="btn quiet small" onClick={balance.reload} type="button">تحديث</button>
+          <a className="btn primary" href={topup} target="_blank" rel="noopener noreferrer">إضافة رصيد</a>
+        </div>
+      </div>
+      <ErrorNote error={balance.error} />
+      {data && data.ok && (
+        <>
+          <div className="strip" style={{ marginBottom: data.low ? 14 : 0, gridTemplateColumns: '1.2fr 1fr 1fr' }}>
+            <div>
+              <div className={`v num ${data.low ? 'miss' : ''}`}>{money(data.available_credit, data.currency)}</div>
+              <div className="k">الرصيد المتاح</div>
+            </div>
+            <div>
+              <div className="v num" style={{ fontSize: 'var(--fs-xl)' }}>{money(data.balance, data.currency)}</div>
+              <div className="k">الرصيد</div>
+            </div>
+            <div>
+              <div className="muted small">آخر تحديث</div>
+              <div className="small">{data.fetched_at ? when(data.fetched_at) : '—'}</div>
+            </div>
+          </div>
+          {data.low && (
+            <div className="alert warn">الرصيد المتاح أقل من {money(String(data.threshold ?? 10), data.currency)}. شحن الحساب من لوحة Telnyx يجنّب انقطاع المكالمات.</div>
+          )}
+        </>
+      )}
+      {data && !data.ok && <p className="muted small">{data.message}</p>}
+    </div>
+  );
+}
+
 
 function NewTenant({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const [f, setF] = useState({ company: '', name: '', email: '', password: '' });
@@ -64,6 +128,7 @@ export default function Admin() {
   return (
     <>
       <PageHead title="إدارة المنصة" intro="أضف الشركات واربط أرقام Telnyx بها." />
+      <TelnyxBalanceCard />
       <div className="section">
         <div className="section-head"><h2>حالة النظام</h2><button className="btn quiet small" onClick={status.reload}>تحديث</button></div>
         <ErrorNote error={status.error} />

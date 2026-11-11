@@ -98,6 +98,7 @@ Traefik حق Coolify داخل حاوية، فـ `127.0.0.1` عنده مو الس
 | `POSTGRES_PASSWORD` `JWT_SECRET` `ARI_PASSWORD` | `openssl rand -hex 24` |
 | `SUPERADMIN_EMAIL` `SUPERADMIN_PASSWORD` | حساب مدير المنصة |
 | `TRUNK_MODE` `TELNYX_SIP_USER` `TELNYX_SIP_PASSWORD` `TELNYX_SIP_HOST` | من لوحة Telnyx. مع `registration` الـ Asterisk ما يشتغل إذا اسم المستخدم أو كلمة المرور فاضيين؛ خلّ `TRUNK_MODE=none` لين ما تتوفر |
+| `TELNYX_API_KEY` `TELNYX_BALANCE_LOW_THRESHOLD` | مفتاح API v2 لقراءة الرصيد في لوحة مدير المنصة (اختياري). حد التنبيه الافتراضي 10 دولار |
 | `RTP_START` `RTP_END` | `10000` و `20000` |
 
 إذا كلمة السر فيها `$` اكتبها `$$` في Coolify، لأن Compose يفسّر `$`.
@@ -123,6 +124,7 @@ Traefik حق Coolify داخل حاوية، فـ `127.0.0.1` عنده مو الس
 4. **الرقم:** اشترِ رقم (للتجربة يكفي رقم أمريكي) واربطه بنفس الـ SIP Connection.
 5. أعد تشغيل Asterisk: `docker compose restart asterisk`. من صفحة إدارة المنصة لازم يطلع «خط الاتصال: جاهز».
 6. أضف الرقم من صفحة إدارة المنصة بصيغة دولية (مثل `+15551234567`) واختر الشركة.
+7. **رصيد الحساب:** لوحة مدير المنصة تعرض الرصيد المتاح من Telnyx (`GET /v2/balance`) إذا وُضع `TELNYX_API_KEY`، مع زر «إضافة رصيد» يفتح [صفحة الدفع في Mission Control](https://portal.telnyx.com/#/billing/payment). الشحن يتم من بوابة Telnyx فقط (ما فيه شحن من اللوحة). التنبيه يظهر إذا نزل `available_credit` تحت `TELNYX_BALANCE_LOW_THRESHOLD` (الافتراضي 10 دولار). مدراء الشركات ما يشوفون رصيد المنصة.
 
 إذا اخترت اتصال Telnyx بنوع **IP Address** بدل Credentials: خلّ `TRUNK_MODE=ip`، حط IP السيرفر في Telnyx، وعبّي `TELNYX_SIGNALING_IPS` بعناوين Telnyx المذكورة في توثيقهم.
 

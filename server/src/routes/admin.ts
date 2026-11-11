@@ -6,6 +6,7 @@ import { ari } from '../engine/ari.js';
 import { activeCalls } from '../engine/calls.js';
 import { requireSuperadmin } from '../lib/auth.js';
 import { normalizeDid } from '../lib/phone.js';
+import { getTelnyxBalance } from '../lib/telnyx-balance.js';
 import { HttpError } from '../lib/tenancy.js';
 import { createTenantWithOwner } from './auth.js';
 
@@ -87,4 +88,6 @@ export default async function adminRoutes(app: FastifyInstance) {
     await q('delete from phone_numbers where id=$1', [id]);
     return { ok: true };
   });
+
+  app.get('/api/admin/telnyx-balance', { preHandler: requireSuperadmin }, async () => getTelnyxBalance());
 }
